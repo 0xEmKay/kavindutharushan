@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="What any website can learn about your browser without cookies.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browser fingerprint · Kavindu Tharushan</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="tools.css">
+    <script src="script.js"></script>
+    <style>
+        .sig { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: .15rem 1rem; padding: .7rem 0; border-bottom: 1px solid var(--rule); }
+        .sig .n small { display: block; color: var(--muted); font-size: .8rem; }
+        .sig .val { overflow-wrap: anywhere; }
+        .sig .val.wait { color: var(--muted); }
+        .sig .why { grid-column: 2; color: var(--muted); font-size: .9rem; }
+        @media (max-width: 480px) {
+            .sig { grid-template-columns: 1fr; }
+            .sig .why { grid-column: 1; }
+        }
+        #fp { font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; margin-bottom: .5rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><a href="index.html">Kavindu Tharushan</a></h1>
+        <nav aria-label="Main">
+            <ul>
+                <li><a href="index.html">home</a></li>
+                <li><a href="now.html">now</a></li>
+                <li><a href="thoughts.html">thoughts</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <h2 class="post-title">Browser fingerprint</h2>
+        <p class="meta">what any site can learn without cookies</p>
+
+        <p class="intro">Every value below is readable by any page you open, with no permission prompt. Combined, they can single out one browser among millions. This all runs on your device and nothing is sent anywhere.</p>
+
+        <h2>your fingerprint</h2>
+        <p id="fp">working…</p>
+        <p class="small">A short hash of the stable values below. A tracker would use something like it as an ID. Open this page in a private window or another browser and compare. If it changes, the two look different to a tracker.</p>
+        <p class="small" id="fpNote"></p>
+
+        <h2>the signals</h2>
+        <div id="signals"></div>
+
+        <h2>what you can do</h2>
+        <ul class="bullets">
+            <li>Firefox's Strict tracking protection blocks known fingerprinting scripts. The <code>privacy.resistFingerprinting</code> setting in <code>about:config</code> makes many values generic, but it can break some sites and forces the timezone to UTC.</li>
+            <li>Brave adds small random noise to canvas and WebGL results ("farbling") by default, so they change between sessions.</li>
+            <li>Tor Browser tries to make every user look the same, which is the strongest approach.</li>
+            <li>uBlock Origin blocks many tracking scripts, but it can't change what your browser reveals to a page you choose to visit.</li>
+            <li>Standing out is the problem. Unusual settings and extra fonts make you more unique, so changing many settings by hand often backfires.</li>
+        </ul>
+    </main>
+
+    <footer>
+        <p id="lastVisit"></p>
+    </footer>
+
+    <script>
+    (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var nav = navigator;
+
+        function fnv(s) {
+            var h = 0x811c9dc5;
+            for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+            return ("00000000" + h.toString(16)).slice(-8);
+        }
+        function sha(s) {
+            if (window.crypto && crypto.subtle) {
+                return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(function (b) {
+                    return Array.from(new Uint8Array(b), function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+                });
+            }
+            return Promise.resolve(fnv(s) + fnv(s.split("").reverse().join("")));
+        }
+        function mq(q) { return window.matchMedia && window.matchMedia(q).matches; }
+
+        function tz() {
+            var name = "unknown";
+            try { name = Intl.DateTimeFormat().resolvedOptions().timeZone || name; } catch (e) {}
+            var off = -new Date().getTimezoneOffset(), sign = off < 0 ? "-" : "+", a = Math.abs(off);
+            return name + " (UTC" + sign + String(Math.floor(a / 60)).padStart(2, "0") + ":" + String(a % 60).padStart(2, "0") + ")";
+        }
+
+        function drawCanvas() {
+            var c = document.createElement("canvas");
+            c.width = 260; c.height = 60;
+            var x = c.getContext("2d");
+            if (!x) return null;
+            x.textBaseline = "top";
+            x.font = "16px Arial";
+            x.fillStyle = "#f60"; x.fillRect(100, 1, 62, 20);
+            x.fillStyle = "#069"; x.fillText("fingerprint, kavindu \u{1F603}", 2, 15);
+            x.fillStyle = "rgba(102,204,0,.7)"; x.fillText("fingerprint, kavindu \u{1F603}", 4, 17);
+            return c.toDataURL();
+        }
+        function canvasSignal() {
+            var a = drawCanvas(), b = drawCanvas();
+            if (a === null) return { t: "not available", skip: true };
+            if (a !== b) return { t: "different on every read, so your browser is adding noise (a good sign)", skip: true };
+            return sha(a).then(function (h) { return { t: h.slice(0, 16) }; });
+        }
+
+        function webgl() {
+            try {
+                var c = document.createElement("canvas");
+                var gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+                if (!gl) return "not available";
+                var ext = gl.getExtension("WEBGL_debug_renderer_info");
+                var v = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+                var r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+                return v + " / " + r + (ext ? "" : " (masked by your browser)");
+            } catch (e) { return "not available"; }
+        }
+
+        function fonts() {
+            var list = ["Arial", "Verdana", "Times New Roman", "Courier New", "Georgia", "Trebuchet MS", "Comic Sans MS", "Impact",
+                "Helvetica", "Calibri", "Cambria", "Consolas", "Segoe UI", "Tahoma", "Palatino", "Menlo", "Monaco", "Ubuntu",
+                "DejaVu Sans", "Liberation Sans", "Noto Sans", "Cantarell", "Roboto", "Adwaita Mono", "Fira Code", "JetBrains Mono", "Lucida Grande"];
+            var bases = ["monospace", "sans-serif", "serif"], s = document.createElement("span");
+            s.textContent = "mmmmmmmmmmlli";
+            s.style.cssText = "position:absolute;left:-9999px;font-size:72px;white-space:nowrap";
+            document.body.appendChild(s);
+            function w(f) { s.style.fontFamily = f; return s.getBoundingClientRect().width; }
+            var baseW = bases.map(w), found = [];
+            list.forEach(function (f) {
+                for (var i = 0; i < bases.length; i++) if (w("'" + f + "'," + bases[i]) !== baseW[i]) { found.push(f); return; }
+            });
+            document.body.removeChild(s);
+            return found.length ? found.length + " of " + list.length + " tested: " + found.join(", ") : "none of " + list.length + " tested were detected";
+        }
+
+        var SIGNALS = [
+            { n: "user agent", r: "medium", get: function () { return nav.userAgent; },
+              why: "Sent with every request. It names your browser, version and OS. Browsers now trim it, so it identifies less than it used to." },
+            { n: "platform", r: "low", get: function () { return (nav.userAgentData && nav.userAgentData.platform) || nav.platform || "unknown"; },
+              why: "The operating system family, readable by scripts." },
+            { n: "languages", r: "medium", get: function () { return (nav.languages && nav.languages.length ? nav.languages : [nav.language]).join(", "); },
+              why: "Your language preferences, in order. Sent in the Accept-Language header too. Several languages in a rare order is quite distinctive." },
+            { n: "timezone", r: "medium", get: tz,
+              why: "Narrows you to a region, and combined with language it narrows further. Many sites use it to guess your location." },
+            { n: "screen", r: "medium", get: function () { return screen.width + " × " + screen.height + " at " + (window.devicePixelRatio || 1) + "x, " + screen.colorDepth + "-bit colour"; },
+              why: "Screen size and pixel density. Uncommon monitors and scaling settings stand out." },
+            { n: "window size", r: "low", volatile: true, get: function () { return window.innerWidth + " × " + window.innerHeight; },
+              why: "Changes whenever you resize, so trackers use it mostly to tell tabs and sessions apart. Left out of the fingerprint hash." },
+            { n: "CPU cores", r: "low", get: function () { return nav.hardwareConcurrency ? String(nav.hardwareConcurrency) : "hidden"; },
+              why: "Logical processors available to the page." },
+            { n: "memory", r: "low", get: function () { return nav.deviceMemory ? "at least " + nav.deviceMemory + " GB (rounded)" : "not exposed by this browser"; },
+              why: "Only Chromium browsers expose this, and the value is rounded and capped on purpose." },
+            { n: "touch", r: "low", get: function () { return nav.maxTouchPoints + " touch point" + (nav.maxTouchPoints === 1 ? "" : "s"); },
+              why: "Tells a site whether you are probably on a phone, a tablet, a touchscreen laptop or a plain desktop." },
+            { n: "preferences", r: "low", get: function () {
+                return [mq("(prefers-color-scheme: dark)") ? "dark mode" : "light mode",
+                    mq("(prefers-reduced-motion: reduce)") ? "reduced motion" : "normal motion",
+                    mq("(prefers-contrast: more)") ? "high contrast" : "normal contrast",
+                    mq("(hover: hover)") ? "can hover" : "no hover"].join(", ");
+              },
+              why: "Accessibility and display settings are readable by CSS and scripts. Each one is a small clue." },
+            { n: "privacy signals", r: "low", get: function () {
+                var dnt = nav.doNotTrack || window.doNotTrack || "unset";
+                return "Do Not Track: " + dnt + ", Global Privacy Control: " + (nav.globalPrivacyControl ? "on" : "off") + ", cookies: " + (nav.cookieEnabled ? "enabled" : "disabled");
+              },
+              why: "Ironically, turning these on makes you rarer, because few people do. Sites mostly ignore Do Not Track." },
+            { n: "connection", r: "low", volatile: true, get: function () {
+                var c = nav.connection;
+                return c ? (c.effectiveType || "unknown") + (c.saveData ? ", data saver on" : "") : "not exposed by this browser";
+              },
+              why: "A rough network quality guess. Only Chromium browsers share it. Left out of the fingerprint hash." },
+            { n: "referrer", r: "low", volatile: true, get: function () { return document.referrer || "none (you arrived directly)"; },
+              why: "The page you came from, if your browser sends it. Left out of the fingerprint hash." },
+            { n: "fonts", r: "high", get: fonts,
+              why: "A site can test which fonts you have by measuring text. The mix depends on your OS and the software you've installed, so it is very distinctive." },
+            { n: "canvas", r: "high", get: canvasSignal,
+              why: "A hidden image is drawn and read back. Tiny differences in your GPU, drivers and font rendering change the pixels, and the hash of them works like an ID." },
+            { n: "graphics card", r: "high", get: webgl,
+              why: "WebGL can report your GPU model and driver. Some browsers mask it to a generic value." }
+        ];
+
+        var RATE = { low: "identifying: low", medium: "identifying: medium", high: "identifying: high" };
+        var box = $("signals"), pending = SIGNALS.length, parts = [];
+
+        SIGNALS.forEach(function (s, idx) {
+            var row = document.createElement("div"); row.className = "sig";
+            var n = document.createElement("div"); n.className = "n"; n.textContent = s.n;
+            var rt = document.createElement("small"); rt.textContent = RATE[s.r]; n.appendChild(rt);
+            var val = document.createElement("div"); val.className = "val wait"; val.textContent = "working…";
+            var why = document.createElement("div"); why.className = "why"; why.textContent = s.why;
+            row.appendChild(n); row.appendChild(val); row.appendChild(why); box.appendChild(row);
+
+            Promise.resolve().then(s.get).then(function (r) {
+                var o = typeof r === "string" ? { t: r } : r;
+                val.textContent = o.t; val.className = "val";
+                if (!s.volatile && !o.skip) parts[idx] = s.n + "=" + o.t;
+                if (o.skip && s.n === "canvas") $("fpNote").textContent = "Canvas is left out of the hash because " + (o.t.indexOf("noise") > -1 ? "your browser randomises it." : "it isn't available.");
+            }).catch(function () {
+                val.textContent = "blocked or unavailable"; val.className = "val wait";
+            }).then(function () {
+                if (--pending === 0) {
+                    sha(parts.filter(Boolean).join("\n")).then(function (h) {
+                        $("fp").textContent = h.slice(0, 16);
+                    });
+                }
+            });
+        });
+    })();
+    </script>
+</body>
+</html>

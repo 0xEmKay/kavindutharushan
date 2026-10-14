@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="Estimate how long a password would take to crack, and see the maths.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Password entropy · Kavindu Tharushan</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="tools.css">
+    <script src="script.js"></script>
+</head>
+<body>
+    <header>
+        <h1><a href="index.html">Kavindu Tharushan</a></h1>
+        <nav aria-label="Main">
+            <ul>
+                <li><a href="index.html">home</a></li>
+                <li><a href="now.html">now</a></li>
+                <li><a href="thoughts.html">thoughts</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <h2 class="post-title">Password entropy</h2>
+        <p class="meta">how long would it take to crack, and why</p>
+
+        <label class="tool-label" for="pw">password</label>
+        <input type="password" id="pw" autocomplete="off" spellcheck="false" autocapitalize="off">
+        <p class="small" style="margin-top:.5rem">
+            <label><input type="checkbox" id="show"> show it</label>
+            &nbsp; Nothing is sent or stored. Still, try a similar password rather than a real one.
+        </p>
+
+        <div id="empty" class="intro" style="margin-top:1.5rem">Type something to see its strength.</div>
+
+        <section id="out" hidden>
+            <h2>result</h2>
+            <p class="big" id="bits"></p>
+            <p id="label"></p>
+            <div class="meter" aria-hidden="true"><div id="meterFill"></div></div>
+            <ul class="bullets" id="warn" style="margin-bottom:1.25rem"></ul>
+
+            <h2>time to crack (average)</h2>
+            <div class="table-wrap"><table id="times"></table></div>
+            <p class="small">Guess rates are rough round numbers, not measurements. The average is halfway through the search space.</p>
+
+            <h2>the maths</h2>
+            <div id="maths"></div>
+        </section>
+
+        <h2>what actually helps</h2>
+        <ul class="bullets">
+            <li>Length beats cleverness. Every extra character multiplies the work for an attacker.</li>
+            <li>Random beats memorable. Substituting <code>a</code> for <code>@</code> is in every cracking dictionary.</li>
+            <li>A passphrase of 5 random words from a 7,776-word list is about 64.6 bits, and 6 words is about 77.5 bits.</li>
+            <li>Use a different password everywhere, kept in a password manager. A strong reused password is still one breach away from useless.</li>
+        </ul>
+    </main>
+
+    <footer>
+        <p id="lastVisit"></p>
+    </footer>
+
+    <script>
+    (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var pw = $("pw");
+
+        var COMMON = ("password 123456 123456789 12345678 12345 1234567 qwerty abc123 letmein monkey dragon 111111 " +
+            "iloveyou admin welcome sunshine princess football qwerty123 1q2w3e4r login master hello freedom whatever " +
+            "trustno1 passw0rd password1 123123 000000 654321 superman michael shadow baseball starwars zaq1zaq1 " +
+            "batman qazwsx ninja mustang access flower loveme secret summer ashley bailey charlie donald jordan " +
+            "hunter hockey killer pepper cookie soccer tigger love computer internet").split(" ");
+
+        var SCENARIOS = [
+            ["online, throttled (100 guesses per hour)", 100 / 3600],
+            ["online, no throttling (1,000 per second)", 1e3],
+            ["offline, slow hash like bcrypt or argon2 (10,000 per second)", 1e4],
+            ["offline, fast hash on one GPU (10 billion per second)", 1e10],
+            ["offline, fast hash on a GPU cluster (1 trillion per second)", 1e12]
+        ];
+
+        function leet(s) { return s.replace(/0/g, "o").replace(/1/g, "l").replace(/3/g, "e").replace(/4/g, "a").replace(/5/g, "s").replace(/@/g, "a").replace(/\$/g, "s").replace(/!/g, "i"); }
+        function isCommon(p) {
+            var low = p.toLowerCase(), l2 = leet(low);
+            return [low, low.replace(/[^a-z]+$/, ""), l2, l2.replace(/[^a-z]+$/, "")].some(function (v) {
+                return v && COMMON.indexOf(v) >= 0;
+            });
+        }
+
+        function plural(n, w) { return n + " " + w + (n === 1 ? "" : "s"); }
+        function human(sec) {
+            var y = sec / 31557600;
+            if (!isFinite(sec) || y > 1.38e10) return "longer than the age of the universe";
+            if (sec < 1) return "instantly";
+            if (sec < 60) return plural(Math.round(sec), "second");
+            if (sec < 3600) return plural(Math.round(sec / 60), "minute");
+            if (sec < 86400) return plural(Math.round(sec / 3600), "hour");
+            if (y < 1) return plural(Math.round(sec / 86400), "day");
+            if (y < 1e6) return plural(Math.round(y).toLocaleString(), "year");
+            if (y < 1e9) return (y / 1e6).toFixed(1) + " million years";
+            return (y / 1e9).toFixed(1) + " billion years";
+        }
+
+        function analyse(p) {
+            var chars = Array.from(p), L = chars.length, pool = 0, parts = [];
+            if (/[a-z]/.test(p)) { pool += 26; parts.push("lowercase 26"); }
+            if (/[A-Z]/.test(p)) { pool += 26; parts.push("uppercase 26"); }
+            if (/[0-9]/.test(p)) { pool += 10; parts.push("digits 10"); }
+            if (/[ -\/:-@\[-`{-~]/.test(p)) { pool += 33; parts.push("symbols and space 33"); }
+            if (/[^\x00-\x7F]/.test(p)) { pool += 100; parts.push("other characters 100"); }
+            if (!pool) pool = 1;
+
+            var codes = chars.map(function (c) { return c.codePointAt(0); }), free = 0;
+            for (var i = 2; i < codes.length; i++) {
+                var a = codes[i] - codes[i - 1], b = codes[i - 1] - codes[i - 2];
+                if (a === b && Math.abs(a) <= 1) free++;
+            }
+            var effLen = Math.max(1, L - free), per = Math.log2(Math.max(pool, 2));
+            var naive = L * per, eff = effLen * per, common = isCommon(p);
+            if (common) eff = Math.min(eff, 6);
+            return { L: L, pool: pool, parts: parts, free: free, effLen: effLen, per: per, naive: naive, eff: Math.min(eff, naive), common: common };
+        }
+
+        function rating(h) {
+            return h < 28 ? "very weak" : h < 36 ? "weak" : h < 60 ? "fair" : h < 80 ? "strong" : "very strong";
+        }
+
+        function update() {
+            var p = pw.value;
+            $("empty").hidden = !!p;
+            $("out").hidden = !p;
+            if (!p) return;
+            var a = analyse(p), f1 = function (x) { return x.toFixed(1); };
+
+            $("bits").textContent = f1(a.eff) + " bits";
+            $("label").textContent = rating(a.eff) + (a.eff < a.naive - 0.05 ? " (before penalties: " + f1(a.naive) + " bits)" : "");
+            $("meterFill").style.width = Math.min(100, a.eff) + "%";
+
+            var warn = $("warn"); warn.textContent = "";
+            function w(t) { var li = document.createElement("li"); li.textContent = t; warn.appendChild(li); }
+            if (a.common) w("This is, or is a small variation of, a very common password. Attackers try these first, so treat it as close to zero.");
+            if (a.free) w("It has runs of repeated or sequential characters, like aaa or 123. These add little, so " + plural(a.free, "character") + " were discounted.");
+            if (a.L < 12 && !a.common) w("Under 12 characters is short for anything an attacker can guess offline.");
+
+            var t = $("times"); t.textContent = "";
+            SCENARIOS.forEach(function (s) {
+                var tr = document.createElement("tr"), c1 = document.createElement("td"), c2 = document.createElement("td");
+                c1.textContent = s[0]; c1.style.whiteSpace = "normal"; c2.textContent = human(Math.pow(2, a.eff - 1) / s[1]);
+                tr.appendChild(c1); tr.appendChild(c2); t.appendChild(tr);
+            });
+
+            var m = $("maths"); m.textContent = "";
+            function para(txt) { var el = document.createElement("p"); el.textContent = txt; m.appendChild(el); }
+            para("Each character is picked from a pool of N possible characters. Your password uses: " + (a.parts.join(", ") || "nothing") + ", so N = " + a.pool + ".");
+            para("Entropy is H = L × log2(N). Here that is " + a.effLen + " × log2(" + a.pool + ") = " + a.effLen + " × " + a.per.toFixed(2) + " = " + f1(a.effLen * a.per) + " bits" + (a.free ? " (using " + a.effLen + " of your " + a.L + " characters after discounting patterns)." : "."));
+            para("Each extra bit doubles the number of guesses needed. An attacker finds it on average halfway through, after 2^(H−1) guesses. That is " + (a.eff > 60 ? "about 10^" + ((a.eff - 1) * Math.LOG10E * Math.LN2).toFixed(1) : Math.pow(2, a.eff - 1).toLocaleString(undefined, { maximumFractionDigits: 0 })) + " guesses for this one, divided by how fast they can guess.");
+            para("This assumes every character is random. Real passwords aren't, which is why the pattern and common-password checks above can only lower the estimate, never raise it. The built-in common list is tiny (about 70 entries); real attackers use billions.");
+        }
+
+        pw.addEventListener("input", update);
+        $("show").addEventListener("change", function () { pw.type = this.checked ? "text" : "password"; });
+        update();
+    })();
+    </script>
+</body>
+</html>

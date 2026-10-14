@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="Turn an image into ASCII art, in your browser.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ASCII art · Kavindu Tharushan</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="script.js"></script>
+    <style>
+        .drop {
+            display: block;
+            position: relative;
+            border: 1px dashed var(--muted);
+            padding: 1.6rem 1rem;
+            text-align: center;
+            color: var(--muted);
+            cursor: pointer;
+            margin-bottom: 1.5rem;
+        }
+        .drop:hover, .drop.over { border-color: var(--link); color: var(--link); }
+        .drop:focus-within { outline: 2px solid var(--link); outline-offset: 3px; }
+        .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+        .drop .name { display: block; color: var(--fg); margin-top: .25rem; }
+
+        .controls { display: grid; grid-template-columns: max-content minmax(0, 1fr) 3ch; gap: .5rem 1rem; align-items: center; margin-bottom: 1rem; }
+        .controls label { color: var(--muted); }
+        .controls output { font-variant-numeric: tabular-nums; text-align: right; }
+        .opts { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; align-items: center; margin-bottom: 1.25rem; }
+        .opts label { display: flex; align-items: center; gap: .5rem; color: var(--muted); }
+        input[type="range"], input[type="checkbox"] { accent-color: var(--link); }
+        select {
+            font: inherit; color: var(--fg); background: var(--bg);
+            border: 1px solid var(--rule); padding: .1rem .4rem;
+        }
+        select:focus-visible, input:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+        button {
+            font: inherit; color: var(--link); background: none;
+            border: 1px solid var(--rule); padding: .15rem .8rem; cursor: pointer;
+        }
+        button:hover:not(:disabled) { border-color: var(--link); }
+        button:disabled { color: var(--muted); cursor: default; opacity: .6; }
+        button:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+
+        .stage {
+            border: 1px solid var(--rule);
+            padding: .75rem;
+            margin-top: 1.25rem;
+            width: 100%;
+            max-width: calc(100vw - clamp(1.5rem, 6vw, 5rem) - 1.5rem);
+            overflow: hidden;
+        }
+        .stage[hidden] { display: none; }
+        #out { white-space: pre; line-height: 1.15; letter-spacing: 0; margin: 0; font-family: inherit; }
+        .status { color: var(--muted); font-size: .85rem; margin: .5rem 0 0; }
+        .hint { color: var(--muted); font-size: .9rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><a href="index.html">Kavindu Tharushan</a></h1>
+        <nav aria-label="Main">
+            <ul>
+                <li><a href="index.html">home</a></li>
+                <li><a href="now.html">now</a></li>
+                <li><a href="thoughts.html">thoughts</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <h2 class="post-title">ASCII art</h2>
+        <p class="meta">image to text, in your browser</p>
+
+        <label class="drop" id="drop">
+            <span>drop an image here, paste one, or click to choose</span>
+            <span class="name" id="name"></span>
+            <input type="file" id="file" accept="image/*" aria-label="Choose an image">
+        </label>
+
+        <div class="controls">
+            <label for="width">width</label>
+            <input type="range" id="width" min="20" max="240" value="100">
+            <output id="width-val" for="width">100</output>
+
+            <label for="contrast">contrast</label>
+            <input type="range" id="contrast" min="50" max="250" value="120">
+            <output id="contrast-val" for="contrast">1.2</output>
+        </div>
+
+        <div class="opts">
+            <label>characters
+                <select id="ramp">
+                    <option value=" .:-=+*#%@">classic</option>
+                    <option value=" .'`^&quot;,:;Il!i><~+_-?][}{1)(|\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&amp;8%B@$">detailed</option>
+                    <option value=" ░▒▓█">blocks</option>
+                    <option value=" .oO0@">simple</option>
+                    <option value=" .-+#">tiny</option>
+                </select>
+            </label>
+            <label><input type="checkbox" id="invert"> invert</label>
+        </div>
+
+        <div class="opts">
+            <button id="copy" disabled>copy</button>
+            <button id="save" disabled>download .txt</button>
+        </div>
+
+        <p class="hint" id="hint">Nothing is uploaded. It all runs on your device.</p>
+
+        <div class="stage" id="stage" hidden>
+            <pre id="out" aria-label="ASCII art output"></pre>
+            <p class="status" id="status"></p>
+        </div>
+    </main>
+
+    <footer>
+        <p id="lastVisit"></p>
+    </footer>
+
+    <script>
+    (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var fileEl = $("file"), dropEl = $("drop"), nameEl = $("name");
+        var widthEl = $("width"), contrastEl = $("contrast"), rampEl = $("ramp"), invertEl = $("invert");
+        var outEl = $("out"), stageEl = $("stage"), statusEl = $("status"), hintEl = $("hint");
+        var copyBtn = $("copy"), saveBtn = $("save");
+
+        var LINE_HEIGHT = 1.15;
+        var img = null, text = "", charW = 0.6, fileName = "ascii";
+
+        invertEl.checked = window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+        // Measure real glyph width (em) of the page's monospace font so rows come out the right shape
+        function measure() {
+            var s = document.createElement("span");
+            s.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:" +
+                getComputedStyle(outEl).fontFamily;
+            s.textContent = "M".repeat(20);
+            document.body.appendChild(s);
+            charW = s.getBoundingClientRect().width / 2000 || 0.6;
+            document.body.removeChild(s);
+        }
+
+        function fit() {
+            if (!text) return;
+            var cols = +widthEl.value;
+            var avail = stageEl.clientWidth - 24;
+            var fs = Math.max(3, Math.min(16, avail / (cols * charW)));
+            outEl.style.fontSize = fs.toFixed(2) + "px";
+        }
+
+        function render() {
+            if (!img) return;
+            var cols = +widthEl.value;
+            var aspect = charW / LINE_HEIGHT;
+            var rows = Math.max(1, Math.round(cols * (img.height / img.width) * aspect));
+            var ramp = Array.from(rampEl.value);
+            var k = contrastEl.value / 100;
+
+            var canvas = document.createElement("canvas");
+            canvas.width = cols; canvas.height = rows;
+            var ctx = canvas.getContext("2d", { willReadFrequently: true });
+            var bright = invertEl.checked;
+            ctx.fillStyle = bright ? "#000" : "#fff";
+            ctx.fillRect(0, 0, cols, rows);
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, cols, rows);
+
+            var data = ctx.getImageData(0, 0, cols, rows).data, lines = [];
+            for (var y = 0; y < rows; y++) {
+                var line = "";
+                for (var x = 0; x < cols; x++) {
+                    var i = (y * cols + x) * 4;
+                    var lum = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
+                    lum = Math.min(1, Math.max(0, (lum - 0.5) * k + 0.5));
+                    var d = bright ? lum : 1 - lum;
+                    line += ramp[Math.min(ramp.length - 1, Math.floor(d * ramp.length))];
+                }
+                lines.push(line.replace(/\s+$/, ""));
+            }
+            text = lines.join("\n");
+            outEl.textContent = text;
+            stageEl.hidden = false;
+            hintEl.hidden = true;
+            statusEl.textContent = cols + " × " + rows + " characters, from a " + img.width + " × " + img.height + " image";
+            copyBtn.disabled = saveBtn.disabled = false;
+            fit();
+        }
+
+        function load(f) {
+            if (!f || f.type.indexOf("image/") !== 0) {
+                hintEl.hidden = false;
+                hintEl.textContent = "That file isn't an image. Try a PNG, JPG, WebP or GIF.";
+                return;
+            }
+            var url = URL.createObjectURL(f), im = new Image();
+            im.onload = function () {
+                img = im;
+                fileName = f.name.replace(/\.[^.]+$/, "") || "ascii";
+                nameEl.textContent = f.name || "pasted image";
+                render();
+                URL.revokeObjectURL(url);
+            };
+            im.onerror = function () {
+                hintEl.hidden = false;
+                hintEl.textContent = "Couldn't read that image. Try a different file.";
+                URL.revokeObjectURL(url);
+            };
+            im.src = url;
+        }
+
+        fileEl.addEventListener("change", function () { load(fileEl.files && fileEl.files[0]); });
+
+        ["dragenter", "dragover"].forEach(function (t) {
+            dropEl.addEventListener(t, function (e) { e.preventDefault(); dropEl.classList.add("over"); });
+        });
+        ["dragleave", "drop"].forEach(function (t) {
+            dropEl.addEventListener(t, function (e) { e.preventDefault(); dropEl.classList.remove("over"); });
+        });
+        dropEl.addEventListener("drop", function (e) { load(e.dataTransfer.files[0]); });
+        window.addEventListener("dragover", function (e) { e.preventDefault(); });
+        window.addEventListener("drop", function (e) { e.preventDefault(); });
+
+        document.addEventListener("paste", function (e) {
+            var items = (e.clipboardData && e.clipboardData.items) || [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf("image/") === 0) { load(items[i].getAsFile()); break; }
+            }
+        });
+
+        widthEl.addEventListener("input", function () { $("width-val").textContent = widthEl.value; render(); });
+        contrastEl.addEventListener("input", function () { $("contrast-val").textContent = (contrastEl.value / 100).toFixed(1); render(); });
+        rampEl.addEventListener("change", render);
+        invertEl.addEventListener("change", render);
+        window.addEventListener("resize", fit);
+
+        copyBtn.addEventListener("click", function () {
+            if (!text) return;
+            navigator.clipboard.writeText(text).then(function () {
+                copyBtn.textContent = "copied";
+                setTimeout(function () { copyBtn.textContent = "copy"; }, 1200);
+            });
+        });
+
+        saveBtn.addEventListener("click", function () {
+            if (!text) return;
+            var a = document.createElement("a");
+            a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+            a.download = fileName + ".txt";
+            a.click();
+            URL.revokeObjectURL(a.href);
+        });
+
+        measure();
+    })();
+    </script>
+</body>
+</html>

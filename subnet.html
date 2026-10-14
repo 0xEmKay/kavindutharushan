@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="IPv4 subnet calculator that runs in your browser.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Subnet calculator · Kavindu Tharushan</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="tools.css">
+    <script src="script.js"></script>
+</head>
+<body>
+    <header>
+        <h1><a href="index.html">Kavindu Tharushan</a></h1>
+        <nav aria-label="Main">
+            <ul>
+                <li><a href="index.html">home</a></li>
+                <li><a href="now.html">now</a></li>
+                <li><a href="thoughts.html">thoughts</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <h2 class="post-title">Subnet calculator</h2>
+        <p class="meta">IPv4, with a splitter</p>
+
+        <label class="tool-label" for="cidr">address and prefix, like 192.168.1.0/26 (or an address and mask)</label>
+        <input type="text" id="cidr" value="192.168.1.0/26" autocomplete="off" spellcheck="false">
+        <div class="examples" id="examples">
+            <span>try</span>
+            <button type="button">10.0.0.0/8</button>
+            <button type="button">172.16.0.0/12</button>
+            <button type="button">192.168.1.77/24</button>
+            <button type="button">203.0.113.5 255.255.255.248</button>
+        </div>
+
+        <p class="err" id="err" role="alert"></p>
+        <dl class="kv" id="result"></dl>
+
+        <section id="split" hidden>
+            <h2>split it up</h2>
+            <label class="tool-label" for="splitTo">into smaller subnets of size</label>
+            <select id="splitTo"></select>
+            <p class="small" id="splitInfo" style="margin-top:.75rem"></p>
+            <div class="seg-bar" id="bar" hidden></div>
+            <div class="table-wrap"><table id="table"></table></div>
+            <p class="small" id="more"></p>
+        </section>
+    </main>
+
+    <footer>
+        <p id="lastVisit"></p>
+    </footer>
+
+    <script>
+    (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var input = $("cidr"), errEl = $("err"), result = $("result");
+        var splitSec = $("split"), splitSel = $("splitTo");
+        var cur = null;
+
+        function parseIP(s) {
+            var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+            if (!m) return null;
+            var n = 0;
+            for (var i = 1; i <= 4; i++) { if (+m[i] > 255) return null; n = n * 256 + +m[i]; }
+            return n;
+        }
+        function toStr(n) { return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join("."); }
+        function maskOf(p) { return p === 0 ? 0 : (0xFFFFFFFF << (32 - p)) >>> 0; }
+
+        function parse(s) {
+            var m = /^(\S+?)\s*\/\s*(\d{1,2})$/.exec(s), ip, p;
+            if (m) {
+                ip = parseIP(m[1]); p = +m[2];
+                if (p > 32) return null;
+            } else {
+                m = /^(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+                if (!m) return null;
+                ip = parseIP(m[1]);
+                var mk = parseIP(m[2]);
+                if (mk === null) return null;
+                p = -1;
+                for (var i = 0; i <= 32; i++) if (maskOf(i) === mk) { p = i; break; }
+                if (p < 0) return null;
+            }
+            return ip === null ? null : { ip: ip, p: p };
+        }
+
+        var KINDS = [
+            ["0.0.0.0", 8, "\"this\" network"], ["10.0.0.0", 8, "private (RFC 1918)"],
+            ["100.64.0.0", 10, "shared address space (carrier-grade NAT)"], ["127.0.0.0", 8, "loopback"],
+            ["169.254.0.0", 16, "link-local"], ["172.16.0.0", 12, "private (RFC 1918)"],
+            ["192.0.2.0", 24, "documentation"], ["192.168.0.0", 16, "private (RFC 1918)"],
+            ["198.51.100.0", 24, "documentation"], ["203.0.113.0", 24, "documentation"],
+            ["224.0.0.0", 4, "multicast"], ["240.0.0.0", 4, "reserved"]
+        ];
+        function kind(n) {
+            for (var i = 0; i < KINDS.length; i++)
+                if (((n & maskOf(KINDS[i][1])) >>> 0) === parseIP(KINDS[i][0])) return KINDS[i][2];
+            return "public";
+        }
+
+        function bits(n, p) {
+            var wrap = document.createElement("span");
+            wrap.className = "bits";
+            for (var i = 0; i < 32; i++) {
+                var s = document.createElement("span");
+                s.className = i < p ? "net" : "host";
+                s.textContent = ((n >>> (31 - i)) & 1) + (i % 8 === 7 && i < 31 ? "." : "");
+                wrap.appendChild(s);
+            }
+            return wrap;
+        }
+
+        function add(label, val) {
+            var dt = document.createElement("dt"), dd = document.createElement("dd");
+            dt.textContent = label;
+            if (typeof val === "string") dd.textContent = val; else dd.appendChild(val);
+            result.appendChild(dt); result.appendChild(dd);
+        }
+
+        function usable(p) { return p >= 32 ? 1 : p === 31 ? 2 : Math.pow(2, 32 - p) - 2; }
+        function range(net, p) {
+            var size = Math.pow(2, 32 - p);
+            if (p >= 32) return [net, net, null];
+            if (p === 31) return [net, net + 1, null];
+            return [net + 1, net + size - 2, net + size - 1];
+        }
+
+        function compute() {
+            var r = parse(input.value.trim());
+            result.textContent = "";
+            if (!r) {
+                cur = null; splitSec.hidden = true;
+                errEl.textContent = input.value.trim()
+                    ? "That doesn't look right. Use an address and prefix like 10.0.0.0/8, or an address and a mask like 192.168.1.0 255.255.255.0."
+                    : "";
+                return;
+            }
+            errEl.textContent = "";
+            var p = r.p, mask = maskOf(p), net = (r.ip & mask) >>> 0;
+            var wild = (~mask) >>> 0, last = (net | wild) >>> 0, rg = range(net, p);
+            cur = { net: net, p: p };
+
+            add("address", toStr(r.ip));
+            add("network", toStr(net) + "/" + p);
+            add("broadcast", rg[2] === null ? "n/a" : toStr(last));
+            add("subnet mask", toStr(mask));
+            add("wildcard mask", toStr(wild));
+            add("first host", toStr(rg[0]));
+            add("last host", toStr(rg[1]));
+            add("total addresses", Math.pow(2, 32 - p).toLocaleString());
+            add("usable hosts", usable(p).toLocaleString() + (p === 31 ? " (point-to-point, RFC 3021)" : p === 32 ? " (single host)" : ""));
+            add("type", kind(net));
+            add("address bits", bits(r.ip, p));
+            add("mask bits", bits(mask, p));
+            buildSplit();
+        }
+
+        function buildSplit() {
+            var p = cur.p;
+            if (p >= 32) { splitSec.hidden = true; return; }
+            var prev = +splitSel.value, hi = Math.min(32, p + 10);
+            splitSel.textContent = "";
+            for (var n = p + 1; n <= hi; n++) {
+                var o = document.createElement("option");
+                o.value = n;
+                o.textContent = "/" + n + " (" + Math.pow(2, n - p).toLocaleString() + " subnets)";
+                splitSel.appendChild(o);
+            }
+            var pick = prev > p && prev <= hi ? prev : Math.min(p + 2, hi);
+            splitSel.value = pick;
+            splitSec.hidden = false;
+            renderSplit();
+        }
+
+        function cell(tr, text, tag) {
+            var c = document.createElement(tag || "td");
+            c.textContent = text; tr.appendChild(c);
+        }
+
+        function renderSplit() {
+            if (!cur) return;
+            var N = +splitSel.value, p = cur.p, count = Math.pow(2, N - p), size = Math.pow(2, 32 - N);
+            $("splitInfo").textContent = count.toLocaleString() + " subnets of /" + N + ", each with " +
+                usable(N).toLocaleString() + " usable host" + (usable(N) === 1 ? "" : "s") + ".";
+
+            var bar = $("bar");
+            bar.textContent = "";
+            bar.hidden = count > 128;
+            if (count <= 128) {
+                for (var i = 0; i < count; i++) {
+                    var d = document.createElement("div");
+                    d.title = toStr(cur.net + i * size) + "/" + N;
+                    bar.appendChild(d);
+                }
+            }
+
+            var table = $("table");
+            table.textContent = "";
+            var head = document.createElement("tr");
+            ["network", "usable range", "broadcast"].forEach(function (h) { cell(head, h, "th"); });
+            table.appendChild(head);
+            var shown = Math.min(count, 64);
+            for (var j = 0; j < shown; j++) {
+                var net = cur.net + j * size, rg = range(net, N), tr = document.createElement("tr");
+                cell(tr, toStr(net) + "/" + N);
+                cell(tr, rg[0] === rg[1] ? toStr(rg[0]) : toStr(rg[0]) + " to " + toStr(rg[1]));
+                cell(tr, rg[2] === null ? "n/a" : toStr(rg[2]));
+                table.appendChild(tr);
+            }
+            $("more").textContent = count > shown ? "Showing the first " + shown + " of " + count.toLocaleString() + "." : "";
+        }
+
+        input.addEventListener("input", compute);
+        splitSel.addEventListener("change", renderSplit);
+        $("examples").addEventListener("click", function (e) {
+            if (e.target.tagName === "BUTTON") { input.value = e.target.textContent; compute(); }
+        });
+        compute();
+    })();
+    </script>
+</body>
+</html>
